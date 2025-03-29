@@ -5070,7 +5070,7 @@ declare module 'coc.nvim' {
      */
     insertText?: string
     /**
-     * When `true` and onCompleteDone handler not exits on source, the snippet
+     * When `true` and onCompleteDone handler not exists on source, the snippet
      * would be expanded after confirm completion.
      */
     isSnippet?: boolean
@@ -6834,8 +6834,8 @@ declare module 'coc.nvim' {
   type EmptyEvents = 'FocusGained' | 'FocusLost' | 'InsertSnippet'
   type InsertChangeEvents = 'TextChangedP' | 'TextChangedI'
   type TaskEvents = 'TaskExit' | 'TaskStderr' | 'TaskStdout'
-  type WindowEvents = 'WinLeave' | 'WinEnter'
-  type AllEvents = BufEvents | EmptyEvents | MoveEvents | TaskEvents | WindowEvents | InsertChangeEvents | 'CompleteDone' | 'TextChanged' | 'MenuPopupChanged' | 'InsertCharPre' | 'FileType' | 'BufWinEnter' | 'BufWinLeave' | 'VimResized' | 'DirChanged' | 'OptionSet' | 'Command' | 'BufReadCmd' | 'GlobalChange' | 'InputChar' | 'WinLeave' | 'MenuInput' | 'PromptInsert' | 'FloatBtnClick' | 'InsertSnippet' | 'PromptKeyPress'
+  type WindowEvents = 'WinLeave' | 'WinEnter' | 'WinClosed'
+  type AllEvents = BufEvents | EmptyEvents | MoveEvents | TaskEvents | WindowEvents | InsertChangeEvents | 'CompleteDone' | 'TextChanged' | 'MenuPopupChanged' | 'InsertCharPre' | 'FileType' | 'BufWinEnter' | 'BufWinLeave' | 'VimResized' | 'DirChanged' | 'OptionSet' | 'Command' | 'BufReadCmd' | 'GlobalChange' | 'InputChar' | 'WinLeave' | 'MenuInput' | 'PromptInsert' | 'FloatBtnClick' | 'InsertSnippet' | 'PromptKeyPress' | 'WinScrolled'
   type OptionValue = string | number | boolean
   type PromptWidowKeys = 'C-j' | 'C-k' | 'C-n' | 'C-p' | 'up' | 'down'
 
@@ -6955,6 +6955,10 @@ declare module 'coc.nvim' {
      * Attach handler to window event.
      */
     export function on(event: WindowEvents, handler: (winid: number) => EventResult, thisArg?: any, disposables?: Disposable[]): Disposable
+    /**
+     * Attach handler to window scroll event.
+     */
+    export function on(event: WindowEvents, handler: (winid: number, bufnr: number) => EventResult, thisArg?: any, disposables?: Disposable[]): Disposable
     /**
      * Attach handler to float button click.
      */
@@ -9255,7 +9259,7 @@ declare module 'coc.nvim' {
     /**
      * The exit status of the terminal, this will be undefined while the terminal is active.
      *
-     * **Example:** Show a notification with the exit code when the terminal exits with a
+     * **Example:** Show a notification with the exit code when the terminal exists with a
      * non-zero exit code.
      * ```typescript
      * window.onDidCloseTerminal(t => {
@@ -10743,6 +10747,15 @@ declare module 'coc.nvim' {
     isActive: boolean
   }
 
+  export interface UltiSnipsActions {
+    // pre_expand action code.
+    preExpand?: string
+    // post_expand action code.
+    postExpand?: string
+    // post_jump action code.
+    postJump?: string
+  }
+
   export interface UltiSnippetOption {
     /**
      * Regex text for regex snippet.
@@ -10764,6 +10777,10 @@ declare module 'coc.nvim' {
      * Remove whitespace immediately before the cursor at the end of a line before jumping to the next tabstop
      */
     removeWhiteSpace?: boolean
+    /**
+     * UltiSnips action codes of the snippet.
+     */
+    actions: UltiSnipsActions
   }
 
   /**
@@ -10847,7 +10864,7 @@ declare module 'coc.nvim' {
    */
   export namespace snippetManager {
     /**
-     * Get snippet session by bufnr.
+     * Get snippet session by bufnr, only returns active session.
      */
     export function getSession(bufnr: number): SnippetSession | undefined
     /**
@@ -10855,14 +10872,26 @@ declare module 'coc.nvim' {
      */
     export function resolveSnippet(body: string, ultisnip?: UltiSnippetOption): Promise<string>
     /**
-     * Insert snippet at current buffer.
+     * Insert snippet to specific buffer, ultisnips not supported, and the placeholder is not selected.
      *
-     * @param {string} snippet Textmate snippet string.
-     * @param {boolean} select Not select first placeholder when false, default `true`.
-     * @param {Range} range Replace range, insert to current cursor position when undefined.
-     * @returns {Promise<boolean>} true when insert success.
+     * @param bufnr Buffer number for snippet to insert.
+     * @param snippet Textmate snippet or snippet string.
+     * @param range Range to replace.
+     * @param insertTextMode The insert text mode.
+     * @returns Whether the snippet is activated.
      */
-    export function insertSnippet(snippet: string | SnippetString, select?: boolean, range?: Range, ultisnip?: UltiSnippetOption | boolean): Promise<boolean>
+    export function insertBufferSnippet(bufnr: number, snippet: string | SnippetString, range: Range, insertTextMode?: InsertTextMode): Promise<boolean>
+    /**
+     * Insert snippet to current buffer.
+     *
+     * @param snippet Textmate snippet string.
+     * @param select Not select first placeholder when false, default `true`.
+     * @param range Replace range, insert to current cursor position when undefined.
+     * @param insertTextMode The insert text mode.
+     * @param ultisnip Option of UltiSnips snippet.
+     * @returns Whether the snippet is activated.
+     */
+    export function insertSnippet(snippet: string | SnippetString, select?: boolean, range?: Range, insertTextMode?: InsertTextMode, ultisnip?: UltiSnippetOption): Promise<boolean>
 
     /**
      * Jump to next placeholder, only works when snippet session activated.
