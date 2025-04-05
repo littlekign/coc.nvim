@@ -108,6 +108,7 @@ export default class LanguageSource implements ISource<CompletionItem> {
       } catch (e) {
         invalid = true
         this.resolving.delete(item)
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject(e)
       }
     })
@@ -119,12 +120,8 @@ export default class LanguageSource implements ISource<CompletionItem> {
 
   public async onCompleteDone(item: CompletionItem, opt: CompleteDoneOption): Promise<void> {
     let doc = workspace.getDocument(opt.bufnr)
-    await doc.patchChange(true)
+    await doc.patchChange()
     let additionalEdits = !isFalsyOrEmpty(item.additionalTextEdits)
-    if (additionalEdits) {
-      let shouldCancel = await snippetManager.editsInsideSnippet(item.additionalTextEdits)
-      if (shouldCancel) snippetManager.cancel()
-    }
     let version = doc.version
     let isSnippet = await this.applyTextEdit(doc, additionalEdits, item, opt)
     if (additionalEdits) {

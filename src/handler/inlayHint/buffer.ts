@@ -1,5 +1,5 @@
 'use strict'
-import { Neovim } from '@chemzqm/neovim'
+import { Neovim, VirtualTextOption } from '@chemzqm/neovim'
 import { InlayHintKind, Range } from 'vscode-languageserver-types'
 import events from '../../events'
 import languages, { ProviderName } from '../../languages'
@@ -7,11 +7,12 @@ import { SyncItem } from '../../model/bufferSync'
 import Document from '../../model/document'
 import Regions from '../../model/regions'
 import { getLabel, InlayHintWithProvider } from '../../provider/inlayHintManager'
-import { delay, getConditionValue } from '../../util'
+import { getConditionValue, waitWithToken } from '../../util'
 import { CancellationError } from '../../util/errors'
 import { positionInRange } from '../../util/position'
 import { CancellationToken, CancellationTokenSource, Emitter, Event } from '../../util/protocol'
 import { byteIndex } from '../../util/string'
+import window from '../../window'
 import workspace from '../../workspace'
 
 export interface InlayHintConfig {
@@ -32,9 +33,6 @@ let srcId: number | undefined
 const debounceInterval = getConditionValue(150, 10)
 const requestDelay = getConditionValue(500, 10)
 
-// Extend the rendering range for better experience when scrolling
-const RenderRangeExtendSize = 10
-
 function getHighlightGroup(kind: InlayHintKind): string {
   switch (kind) {
     case InlayHintKind.Parameter:
@@ -54,15 +52,11 @@ export default class InlayHintBuffer implements SyncItem {
   private currentHints: InlayHintWithProvider[] = []
   private readonly _onDidRefresh = new Emitter<void>()
   public readonly onDidRefresh: Event<void> = this._onDidRefresh.event
-  public render: ((ms?: number) => void) & { clear: () => void }
   constructor(
     private readonly nvim: Neovim,
     public readonly doc: Document
   ) {
-    this.render = delay(() => {
-      void this.renderRange()
-    }, debounceInterval)
-    if (this.hasProvider) this.render()
+    void this.render()
   }
 
   public get config(): InlayHintConfig {
@@ -73,7 +67,7 @@ export default class InlayHintBuffer implements SyncItem {
 
   public loadConfiguration(): void {
     let config = workspace.getConfiguration('inlayHint', this.doc)
-    let changed = this._config && this._config.enable != config.enable
+    let changed = this._config && this._config.enable !== config.enable
     this._config = {
       enable: config.get<boolean>('enable'),
       position: config.get<InlayHintPosition>('position'),
@@ -84,18 +78,18 @@ export default class InlayHintBuffer implements SyncItem {
     }
     if (changed) {
       let { enable, display } = this._config
-      if (enable) {
+      if (enable && display) {
+        void this.render(0)
+      } else {
         this.clearCache()
         this.clearVirtualText()
-      } else if (display) {
-        void this.renderRange()
       }
     }
   }
 
   public onInsertLeave(): void {
     if (this.config.refreshOnInsertMode) return
-    this.render()
+    void this.render()
   }
 
   public onInsertEnter(): void {
@@ -109,7 +103,6 @@ export default class InlayHintBuffer implements SyncItem {
 
   public get enabled(): boolean {
     if (!this.config.display || !this.configEnabled) return false
-    if (workspace.isNvim && !workspace.has('nvim-0.10.0') && !global.__TEST__) return false
     return this.hasProvider
   }
 
@@ -126,7 +119,7 @@ export default class InlayHintBuffer implements SyncItem {
   public enable() {
     this.checkState()
     this.config.display = true
-    void this.renderRange()
+    void this.render()
   }
 
   public disable() {
@@ -150,23 +143,20 @@ export default class InlayHintBuffer implements SyncItem {
   }
 
   public clearCache(): void {
+    this.cancel()
     this.currentHints = []
     this.regions.clear()
-    this.render.clear()
   }
 
   public onTextChange(): void {
     this.clearCache()
-    this.cancel()
   }
 
   public onChange(): void {
-    this.cancel()
-    this.render()
+    void this.render()
   }
 
   public cancel(): void {
-    this.render.clear()
     if (this.tokenSource) {
       this.tokenSource.cancel()
       this.tokenSource = null
@@ -178,27 +168,39 @@ export default class InlayHintBuffer implements SyncItem {
       return await languages.provideInlayHints(this.doc.textDocument, range, token)
     } catch (e) {
       if (!token.isCancellationRequested && e instanceof CancellationError) {
-        // wait for more time
-        this.render(requestDelay)
+        // server cancel, wait for more time
+        void this.render(undefined, requestDelay)
       }
     }
   }
 
-  public async renderRange(): Promise<void> {
+  public async render(winid?: number, delay?: number): Promise<void> {
     this.cancel()
     if ((events.insertMode && !this.config.refreshOnInsertMode) || !this.enabled) return
     this.tokenSource = new CancellationTokenSource()
     let token = this.tokenSource.token
-    let res = await this.nvim.call('coc#window#visible_range') as [number, number]
-    if (!Array.isArray(res) || res[1] <= 0 || token.isCancellationRequested) return
+    await waitWithToken(typeof delay === 'number' ? delay : debounceInterval, token)
+    if (token.isCancellationRequested) return
+    const { doc } = this
+    const spans = await window.getVisibleRanges(doc.bufnr, winid)
     if (!srcId) srcId = await this.nvim.createNamespace('coc-inlayHint')
-    if (token.isCancellationRequested || this.regions.has(res[0], res[1])) return
-    const startLine = Math.max(0, res[0] - RenderRangeExtendSize)
-    const endLine = Math.min(this.doc.lineCount, res[1] + RenderRangeExtendSize)
-    let range = this.doc.textDocument.intersectWith(Range.create(startLine, 0, endLine, 0))
+    for (const [topline, botline] of spans) {
+      if (token.isCancellationRequested) break
+      await this.renderRange([topline - 1, botline - 1], token)
+    }
+  }
+
+  /**
+   * 0 based startLine and endLine
+   */
+  private async renderRange(lines: [number, number], token: CancellationToken): Promise<void> {
+    let span = this.regions.toUncoveredSpan(lines, workspace.env.lines, this.doc.lineCount)
+    if (!span) return
+    const [startLine, endLine] = span
+    const range = this.doc.textDocument.intersectWith(Range.create(startLine, 0, endLine + 1, 0))
     let inlayHints = await this.requestInlayHints(range, token)
     if (inlayHints == null || token.isCancellationRequested) return
-    this.regions.add(res[0], res[1])
+    this.regions.add(startLine, endLine)
     if (!this.config.enableParameter) {
       inlayHints = inlayHints.filter(o => o.kind !== InlayHintKind.Parameter)
     }
@@ -210,7 +212,6 @@ export default class InlayHintBuffer implements SyncItem {
   public setVirtualText(range: Range, inlayHints: InlayHintWithProvider[]): void {
     let { nvim, doc } = this
     let buffer = doc.buffer
-
     nvim.pauseNotification()
     buffer.clearNamespace(srcId, range.start.line, range.end.line + 1)
     for (const item of inlayHints) {
@@ -228,9 +229,10 @@ export default class InlayHintBuffer implements SyncItem {
       if (this.config.position == InlayHintPosition.Eol) {
         col = 0
       }
-      // TODO right_gravity field is absent in VirtualTextOption
-      let opts: any = { col, hl_mode: 'replace' }
-      if (!nvim.isVim && item.kind == InlayHintKind.Parameter) { opts.right_gravity = false }
+      let opts: VirtualTextOption = { col, hl_mode: 'replace' }
+      if (item.kind == InlayHintKind.Parameter) {
+        opts.right_gravity = false
+      }
       buffer.setVirtualText(srcId, position.line, chunks, opts)
     }
     nvim.resumeNotification(true, true)
@@ -243,5 +245,6 @@ export default class InlayHintBuffer implements SyncItem {
 
   public dispose(): void {
     this.cancel()
+    this.regions.clear()
   }
 }

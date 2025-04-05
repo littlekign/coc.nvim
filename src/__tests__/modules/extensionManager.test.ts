@@ -36,7 +36,7 @@ afterAll(async () => {
 
 function createFolder(): string {
   let folder = path.join(os.tmpdir(), uuid())
-  fs.mkdirSync(folder)
+  fs.mkdirSync(folder, { recursive: true })
   return folder
 }
 
@@ -152,14 +152,15 @@ describe('ExtensionManager', () => {
     })
 
     it('should automatically activated', async () => {
-      workspace.workspaceFolderControl.addWorkspaceFolder(__dirname, false)
+      let folder = createFolder()
+      fs.writeFileSync(path.join(folder, 'base.js'), 'foo', 'utf8')
+      workspace.workspaceFolderControl.addWorkspaceFolder(folder, false)
       tmpfolder = createFolder()
       let code = `exports.activate = (ctx) => {return {abs: ctx.asAbsolutePath('./foo')}}`
-      let basename = path.basename(__filename)
       createExtension(tmpfolder, {
-        name: 'FooBar',
+        name: 'auto',
         engines: { coc: '>= 0.0.80' },
-        activationEvents: ['workspaceContains:' + basename],
+        activationEvents: ['workspaceContains:base.js'],
         contributes: {
           rootPatterns: [
             {
@@ -169,25 +170,26 @@ describe('ExtensionManager', () => {
                 "jsconfig.json"
               ]
             }
-          ],
-          commands: [
-            {
-              title: "Test",
-              command: "test.run"
-            }
           ]
         }
       }, code)
       let manager = create(tmpfolder)
+      let spy = jest.spyOn(workspace, 'checkPatterns').mockImplementation(() => {
+        return Promise.resolve(true)
+      })
+      disposables.push(Disposable.create(() => {
+        spy.mockRestore()
+      }))
       await manager.activateExtensions()
       await manager.loadExtension(tmpfolder)
-      let item = manager.getExtension('FooBar')
+      let item = manager.getExtension('auto')
       await helper.waitValue(() => {
         return item.extension.isActive
       }, true)
       expect(manager.all.length).toBe(1)
-      expect(manager.getExtensionState('FooBar')).toBe('activated')
+      expect(manager.getExtensionState('auto')).toBe('activated')
       expect(item.extension.exports['abs']).toBeDefined()
+      fs.rmSync(folder, { recursive: true, force: true })
     })
   })
 
@@ -552,6 +554,7 @@ describe('ExtensionManager', () => {
       }
       await expect(fn()).rejects.toThrow()
       fn = async () => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
         item.extension.exports
       }
       await expect(fn()).rejects.toThrow()
@@ -646,7 +649,7 @@ describe('ExtensionManager', () => {
       let res = await manager.loadExtension(extFolder)
       expect(res).toBe(true)
       let spy = jest.spyOn(workspace.fileSystemWatchers, 'getWatchmanPath').mockImplementation(() => {
-        return Promise.reject('not found')
+        return Promise.reject(new Error('not found'))
       })
       let fn = async () => {
         await manager.watchExtension('name')

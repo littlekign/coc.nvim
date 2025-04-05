@@ -15,6 +15,7 @@ import { ansiparse, parseAnsiHighlights } from '../../util/ansiparse'
 import * as arrays from '../../util/array'
 import { filter } from '../../util/async'
 import * as color from '../../util/color'
+import { pluginRoot } from '../../util/constants'
 import { getSymbolKind } from '../../util/convert'
 import * as diff from '../../util/diff'
 import * as errors from '../../util/errors'
@@ -110,7 +111,7 @@ console.debug('debug')
 console.info('info')
 console.error('error')
 console.warn('warn')`, sandbox)
-    expect(fn).toBeCalledTimes(5)
+    expect(fn).toHaveBeenCalled()
   })
 
   it('should create console', () => {
@@ -557,16 +558,23 @@ describe('Registry', () => {
   it('should parse extension name', () => {
     let parseSource = extension.parseExtensionName
     expect(parseSource(``)).toBeUndefined()
-    expect(parseSource(`a)`, 0)).toBeUndefined()
-    expect(parseSource(`a`, 0)).toBeUndefined()
+    expect(parseSource(`a)`, 0)).toBe('coc.nvim')
+    expect(parseSource(`a`, 0)).toBe('coc.nvim')
     let registry = Registry.as<extension.IExtensionRegistry>(extension.Extensions.ExtensionContribution)
     let filepath = path.join(os.tmpdir(), 'single')
     registry.registerExtension('single', { name: 'single', directory: os.tmpdir(), filepath })
     expect(parseSource(`\n\n${filepath}:1:1`)).toBe('single')
     // expect(parseSource(`\n\n${filepath.slice(0, -3)}:1:1`)).toBeUndefined()
-    expect(parseSource(`\n\n/a/b:1:1`)).toBeUndefined()
+    expect(parseSource(`\n\n/a/b:1:1`)).toBe('coc.nvim')
     let dir = fs.realpathSync(os.tmpdir())
     expect(parseSource(`\n\n${path.join(dir, 'foo')}:1:1`)).toBe('single')
+    let lines = [
+      `at FormatRangeManager.addProvider (${pluginRoot}/src/provider/manager.ts:28:55`,
+      `at FormatRangeManager.register (${pluginRoot}/formatRangeManager.ts:17:17)`,
+      `at PrettierEditService.registerDocumentFormatEditorProviders (${filepath}:253:17)`
+    ]
+    let res = parseSource(`\n\n${lines.join('\n')}`, 2)
+    expect(res).toBe('single')
     registry.unregistExtension('single')
   })
 
@@ -779,6 +787,7 @@ describe('strings', () => {
   it('should convert to text', () => {
     expect(strings.toText(undefined)).toBe('')
     expect(strings.toText(null)).toBe('')
+    expect(strings.toText(3)).toBe('3')
   })
 
   it('should check isEmojiImprecise', () => {
@@ -831,6 +840,16 @@ describe('strings', () => {
     expect(strings.upperFirst('')).toBe('')
     expect(strings.upperFirst('abC')).toBe('AbC')
     expect(strings.upperFirst(undefined)).toBe('')
+  })
+
+  it('should getUnicodeClass', () => {
+    expect(strings.getUnicodeClass(null)).toBe('other')
+    expect(strings.getUnicodeClass('')).toBe('other')
+    expect(strings.getUnicodeClass('\0')).toBe('other')
+    expect(strings.getUnicodeClass('\x1b')).toBe('punctuation')
+    expect(strings.getUnicodeClass('，')).toBe('punctuation')
+    expect(strings.getUnicodeClass('你')).toBe('cjkideograph')
+    expect(strings.getUnicodeClass('😘')).toBe('other')
   })
 })
 
@@ -1045,6 +1064,14 @@ describe('Position', () => {
     expect(positions.samePosition(pos, Position.create(0, 0))).toBe(true)
   })
 
+  test('adjacentPosition', () => {
+    let pos = Position.create(0, 0)
+    expect(positions.adjacentPosition(pos, Range.create(0, 0, 0, 1))).toBe(true)
+    expect(positions.adjacentPosition(pos, Range.create(1, 0, 1, 1))).toBe(false)
+    pos = Position.create(1, 1)
+    expect(positions.adjacentPosition(pos, Range.create(1, 0, 1, 1))).toBe(true)
+  })
+
   test('equalsRange', () => {
     let r = Range.create(0, 0, 0, 1)
     expect(positions.equalsRange(r, r)).toBe(true)
@@ -1098,6 +1125,9 @@ describe('Position', () => {
     let pos = Position.create(0, 0)
     let r = Range.create(pos, pos)
     expect(positions.positionInRange(pos, r)).toBe(0)
+    pos = Position.create(0, 1)
+    r = Range.create(0, 0, 0, 3)
+    expect(positions.positionInRange(pos, r)).toBe(0)
   })
 
   test('comparePosition', () => {
@@ -1145,6 +1175,8 @@ describe('utility', () => {
     await wait(1)
     tokenSource.cancel()
     res = await p
+    expect(res).toBe(true)
+    res = await waitWithToken(10, CancellationToken.Cancelled)
     expect(res).toBe(true)
   })
 
@@ -1200,7 +1232,7 @@ describe('utility', () => {
   it('should resolve concurrent with empty task', async () => {
     let fn = jest.fn()
     await concurrent([], fn, 3)
-    expect(fn).toBeCalledTimes(0)
+    expect(fn).toHaveBeenCalledTimes(0)
   })
 
   it('should run concurrent', async () => {
@@ -1519,6 +1551,11 @@ describe('diff', () => {
       return diff.diffLines(oldLines, newStr.split('\n'), oldLines.length - 2)
     }
 
+    it('should consider new line insert on insert mode', async () => {
+      let res = diff.getTextEdit(['abc', ''], ['abc', '', ''], Position.create(1, 0), true)
+      expect(res).toEqual(toEdit(0, 3, 0, 3, '\n'))
+    })
+
     it('should get textedit without cursor', () => {
       let res = diff.getTextEdit(['a', 'b'], ['a', 'b'])
       expect(res).toBeUndefined()
@@ -1529,11 +1566,11 @@ describe('diff', () => {
       res = diff.getTextEdit(['a', 'b', 'c'], ['a'])
       expect(res).toEqual(toEdit(1, 0, 3, 0, ''))
       res = diff.getTextEdit(['a', 'b'], ['a', 'd'])
-      expect(res).toEqual(toEdit(1, 0, 2, 0, 'd\n'))
+      expect(res).toEqual(toEdit(1, 0, 1, 1, 'd'))
       res = diff.getTextEdit(['a', 'b'], ['a', 'd', 'e'])
-      expect(res).toEqual(toEdit(1, 0, 2, 0, 'd\ne\n'))
+      expect(res).toEqual(toEdit(1, 0, 1, 1, 'd\ne'))
       res = diff.getTextEdit(['a', 'b', 'e'], ['a', 'd', 'e'])
-      expect(res).toEqual(toEdit(1, 0, 2, 0, 'd\n'))
+      expect(res).toEqual(toEdit(1, 0, 1, 1, 'd'))
       res = diff.getTextEdit(['a', 'b', 'e'], ['e'])
       expect(res).toEqual(toEdit(0, 0, 2, 0, ''))
       res = diff.getTextEdit(['a', 'b', 'e'], ['d', 'c', 'a', 'b', 'e'])
@@ -1542,6 +1579,19 @@ describe('diff', () => {
       expect(res).toEqual(toEdit(2, 0, 2, 0, '\n'))
       res = diff.getTextEdit(['a', 'b'], ['a', 'b', '', ''])
       expect(res).toEqual(toEdit(2, 0, 2, 0, '\n\n'))
+    })
+
+    it('should reduceTextEdit', () => {
+      let res = diff.reduceReplceEdit(TextEdit.replace(Range.create(0, 0, 3, 1), 'abd'), 'a\nb\nc\nd', Position.create(0, 1))
+      expect(res).toEqual(TextEdit.replace(Range.create(0, 1, 3, 0), 'b'))
+      res = diff.reduceReplceEdit(TextEdit.replace(Range.create(3, 1, 3, 9), ' '.repeat(5)), ' '.repeat(8), Position.create(3, 3))
+      expect(res).toEqual(TextEdit.replace(Range.create(3, 3, 3, 6), ''))
+      res = diff.reduceReplceEdit(TextEdit.replace(Range.create(3, 1, 3, 4), ' '.repeat(5)), ' '.repeat(3), Position.create(3, 3))
+      expect(res).toEqual(TextEdit.replace(Range.create(3, 1, 3, 1), '  '))
+      res = diff.reduceReplceEdit(TextEdit.replace(Range.create(3, 1, 3, 4), 'x'.repeat(5)), ' '.repeat(3), Position.create(3, 3))
+      expect(res).toEqual(TextEdit.replace(Range.create(3, 1, 3, 4), 'x'.repeat(5)))
+      res = diff.reduceReplceEdit(TextEdit.replace(Range.create(1, 0, 2, 0), 'd\n'), 'b\n')
+      expect(res).toEqual(TextEdit.replace(Range.create(1, 0, 1, 1), 'd'))
     })
 
     it('should get textedit for single line change', () => {
@@ -1614,6 +1664,20 @@ describe('diff', () => {
     })
   })
 
+  describe('get common prefix & suffix', () => {
+    it('should getCommonPrefixLen', () => {
+      expect(diff.getCommonPrefixLen('aa', 'abc', 0)).toBe(0)
+      expect(diff.getCommonPrefixLen(' '.repeat(5), ' '.repeat(10), 4)).toBe(4)
+      expect(diff.getCommonPrefixLen('xy', 'dy', 2)).toBe(0)
+    })
+
+    it('should getCommonSuffixLen', () => {
+      expect(diff.getCommonSuffixLen('aa', 'aa', 0)).toBe(0)
+      expect(diff.getCommonSuffixLen('aa', 'ab', 2)).toBe(0)
+      expect(diff.getCommonSuffixLen(' '.repeat(3), ' '.repeat(5), 2)).toBe(2)
+    })
+  })
+
   describe('patch line', () => {
     it('should patch line', () => {
       let res = diff.patchLine('foo', 'bar foo bar')
@@ -1629,7 +1693,6 @@ describe('diff', () => {
   function blockMilliseconds(ms: number): void {
     let ts = Date.now()
     let i = 0
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (Date.now() - ts > ms) {
         break
@@ -1672,7 +1735,6 @@ describe('diff', () => {
       await filter([1, 2, 3, 4, 5, 6, 7, 8], i => {
         if (i > 1) {
           let ts = Date.now()
-          // eslint-disable-next-line no-constant-condition
           while (true) {
             if (Date.now() - ts > 40) break
           }

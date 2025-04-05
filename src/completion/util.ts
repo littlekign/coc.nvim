@@ -100,7 +100,7 @@ export function getDetail(item: CompletionItem, filetype: string): { filetype: s
   return undefined
 }
 
-export function toCompleteDoneItem(selected: DurationCompleteItem | undefined, item: CompleteItem | undefined): CompleteDoneItem | {} {
+export function toCompleteDoneItem(selected: DurationCompleteItem | undefined, item: CompleteItem | undefined): CompleteDoneItem | object {
   if (!item || !selected) return {}
   return Object.assign({
     word: selected.word,
@@ -142,14 +142,9 @@ export function getResumeInput(option: PartialOption, pretext: string): string {
   const start = characterIndex(line, col)
   const pl = pretext.length
   if (pl < start) return null
-  for (let i = 0; i < pl; i++) {
-    if (i < start) {
-      // should not change content before start col.
-      if (pretext.charCodeAt(i) !== line.charCodeAt(i)) {
-        return null
-      }
-      // should not have white space.
-    } else if (pretext.charCodeAt(i) === CharCode.Space) {
+  for (let i = 0; i < start; i++) {
+    // should not change content before start col.
+    if (pretext.charCodeAt(i) !== line.charCodeAt(i)) {
       return null
     }
   }

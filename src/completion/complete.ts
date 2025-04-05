@@ -64,7 +64,10 @@ export default class Complete {
   private fireRefresh(waitTime: number): void {
     clearTimeout(this.timer)
     if (!waitTime) {
-      this._onDidRefresh.fire()
+      // Needed to wait this._completing = false
+      process.nextTick(() => {
+        this._onDidRefresh.fire()
+      })
     } else {
       this.timer = setTimeout(() => {
         this._onDidRefresh.fire()
@@ -231,7 +234,7 @@ export default class Complete {
             this.results.delete(sourceName)
           }
           resolve()
-        }, err => {
+        }, (err: Error) => {
           reject(err)
         })
       })
@@ -247,7 +250,7 @@ export default class Complete {
     let { document } = this
     this.cancelInComplete()
     let tokenSource = this.createTokenSource(true)
-    await document.patchChange(true)
+    await document.patchChange()
     let { input, colnr, linenr, followWord, position } = this.option
     Object.assign(this.option, {
       word: resumeInput + followWord,

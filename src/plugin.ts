@@ -19,12 +19,14 @@ import window from './window'
 import workspace, { Workspace } from './workspace'
 const logger = createLogger('plugin')
 
+export type Callback = (...args: any[]) => unknown
+
 export default class Plugin {
   private ready = false
   private initialized = false
   public handler: Handler | undefined
   private cursors: Cursors
-  private actions: Map<string, Function> = new Map()
+  private actions: Map<string, Callback> = new Map()
   private disposables: Disposable[] = []
 
   constructor(public nvim: Neovim) {
@@ -61,7 +63,7 @@ export default class Plugin {
     this.addAction('doKeymap', (key: string, defaultReturn: string) => this.handler.workspace.doKeymap(key, defaultReturn))
     this.addAction('registerExtensions', (...folders: string[]) => extensions.manager.loadExtension(folders), 'registExtensions')
     this.addAction('snippetCheck', (checkExpand: boolean, checkJump: boolean) => this.handler.workspace.snippetCheck(checkExpand, checkJump))
-    this.addAction('snippetInsert', (range: Range, newText: string, mode?: InsertTextMode, ultisnip?: UltiSnippetOption) => snippetManager.insertSnippet(newText, true, range, mode, ultisnip, true))
+    this.addAction('snippetInsert', (range: Range, newText: string, mode?: InsertTextMode, ultisnip?: UltiSnippetOption) => snippetManager.insertSnippet(newText, true, range, mode, ultisnip))
     this.addAction('snippetNext', () => snippetManager.nextPlaceholder())
     this.addAction('snippetPrev', () => snippetManager.previousPlaceholder())
     this.addAction('snippetCancel', () => snippetManager.cancel())
@@ -92,7 +94,7 @@ export default class Plugin {
     this.addAction('colorPresentation', () => this.handler.colors.pickPresentation())
     this.addAction('highlight', () => this.handler.documentHighlighter.highlight())
     this.addAction('fold', (kind?: string) => this.handler.fold.fold(kind))
-    this.addAction('startCompletion', (option: { source?: string }) => completion.startCompletion(option))
+    this.addAction('startCompletion', (option: { source?: string, col?: number }) => completion.startCompletion(option))
     this.addAction('sourceStat', () => sources.sourceStats())
     this.addAction('refreshSource', (name: string) => sources.refresh(name))
     this.addAction('toggleSource', (name: string) => sources.toggleSource(name))
@@ -186,7 +188,7 @@ export default class Plugin {
     return completion
   }
 
-  public addAction(key: string, fn: Function, alias?: string): void {
+  public addAction(key: string, fn: Callback, alias?: string): void {
     if (this.actions.has(key)) {
       throw new Error(`Action ${key} already exists`)
     }

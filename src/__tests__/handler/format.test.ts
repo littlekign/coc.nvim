@@ -227,7 +227,7 @@ describe('format handler', () => {
       let buf = nvim.createBuffer(doc.bufnr)
       let lines = await buf.lines
       expect(lines).toEqual(['  a', '  b', '  c'])
-      let options = await workspace.getFormatOptions(doc.uri)
+      let options = await workspace.getFormatOptions(doc.bufnr)
       let token = (new CancellationTokenSource()).token
       let edits = await languages.provideDocumentFormattingEdits(doc.textDocument, options, token)
       expect(edits.length).toBeGreaterThan(0)
@@ -383,6 +383,24 @@ describe('format handler', () => {
       await helper.waitFor('getline', [2], '  ')
       let lines = await buf.lines
       expect(lines).toEqual(['  {', '  ', '  }'])
+    })
+  })
+
+  describe('logProvider()', () => {
+    it('should log provider', () => {
+      format.logProvider(1, [])
+      format.logProvider(1, null)
+      let edits = [TextEdit.insert(Position.create(1, 1), 'foo')]
+      format.logProvider(1, edits)
+      let called = false
+      Object.defineProperty(edits, '__extensionName', {
+        get: () => {
+          called = true
+          return 'name'
+        }
+      })
+      format.logProvider(1, edits)
+      expect(called).toBe(true)
     })
   })
 })
